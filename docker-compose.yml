@@ -1,0 +1,219 @@
+version: '3.8'
+
+services:
+  # -----------------------------------------------------------------
+  # 1. MongoDB Database
+  # -----------------------------------------------------------------
+  mongodb:
+    image: mongo:6.0
+    container_name: codejudge-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - codejudge-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------
+  # 2. Redis - Queue (BullMQ), Rate Limiting, & Live Leaderboard
+  # -----------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: codejudge-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - codejudge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------
+  # 3. Judge0 Dependencies: Postgres & Queue
+  # -----------------------------------------------------------------
+  judge0-db:
+    image: postgres:13.0-alpine
+    container_name: codejudge-judge0-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: judge0password
+      POSTGRES_DB: judge0
+    volumes:
+      - judge0_db_data:/var/lib/postgresql/data
+    networks:
+      - codejudge-network
+
+  judge0-redis:
+    image: redis:7-alpine
+    container_name: codejudge-judge0-redis
+    restart: unless-stopped
+    command: redis-server --appendonly no
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 4. Judge0 CE Sandbox Engine
+  # -----------------------------------------------------------------
+  judge0:
+    image: judge0/judge0:1.13.1
+    container_name: codejudge-judge0-sandbox
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "2358:2358"
+    environment:
+      REDIS_HOST: judge0-redis
+      REDIS_PORT: 6379
+      POSTGRES_HOST: judge0-db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: judge0password
+      POSTGRES_DB: judge0
+    depends_on:
+      - judge0-db
+      - judge0-redis
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 5. Express API Server (Stateless Web Layer)
+  # -----------------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codejudge-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGODB_URI: mongodb://mongodb:27017/codejudge
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JUDGE0_URL: http://judge0:2358
+      JWT_SECRET: super_secret_jwt_key_change_this_in_production_min32chars
+      JWT_EXPIRES_IN: 7d
+      CORS_ORIGIN: http://localhost:3000,http://localhost:5173
+      USE_IN_MEMORY_QUEUE: "false"
+      MOCK_JUDGE0: "false"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 6. Judge Worker (Isolated Asynchronous Execution Pipeline)
+  # -----------------------------------------------------------------
+  judge-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codejudge-worker
+    restart: unless-stopped
+    command: ["node", "src/workers/judge.worker.js"]
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://mongodb:27017/codejudge
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JUDGE0_URL: http://judge0:2358
+      JWT_SECRET: super_secret_jwt_key_change_this_in_production_min32chars
+      USE_IN_MEMORY_QUEUE: "false"
+      MOCK_JUDGE0: "false"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      judge0:
+        condition: service_started
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 7. Frontend (React + Monaco Editor + Nginx Reverse Proxy)
+  # -----------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codejudge-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 8. Prometheus Monitoring Server
+  # -----------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: codejudge-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - api
+    networks:
+      - codejudge-network
+
+  # -----------------------------------------------------------------
+  # 9. Grafana Metrics Dashboard
+  # -----------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: codejudge-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/grafana-dashboard.json:ro
+    depends_on:
+      - prometheus
+    networks:
+      - codejudge-network
+
+# -----------------------------------------------------------------
+# Storage Volumes & Networks
+# -----------------------------------------------------------------
+volumes:
+  mongodb_data:
+  redis_data:
+  judge0_db_data:
+
+networks:
+  codejudge-network:
+    driver: bridge

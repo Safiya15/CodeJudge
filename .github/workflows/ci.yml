@@ -1,0 +1,139 @@
+name: CodeJudge CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # -------------------------------------------------------------
+  # Job 1: Backend Automated Test Suite (Phases 1-8)
+  # -------------------------------------------------------------
+  backend-test:
+    name: Backend Tests & Quality Gate
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Run Phase 1 Tests (Auth, Roles, Models)
+        working-directory: ./backend
+        run: npm test
+
+      - name: Run Phase 2 Tests (Problems & CRUD)
+        working-directory: ./backend
+        run: npm run test:phase2
+
+      - name: Run Phase 3 Tests (Monaco & Run on Samples)
+        working-directory: ./backend
+        run: npm run test:phase3
+
+      - name: Run Phase 4 Tests (BullMQ Queue & Worker)
+        working-directory: ./backend
+        run: npm run test:phase4
+
+      - name: Run Phase 5 Tests (Socket.io Live Verdicts)
+        working-directory: ./backend
+        run: npm run test:phase5
+
+      - name: Run Phase 6 Tests (Contests & Redis Leaderboard)
+        working-directory: ./backend
+        run: npm run test:phase6
+
+      - name: Run Phase 7 Tests (Rate Limiting & Security Hardening)
+        working-directory: ./backend
+        run: npm run test:phase7
+
+      - name: Run Phase 8 Tests (Prometheus Metrics & Grafana)
+        working-directory: ./backend
+        run: npm run test:phase8
+
+      - name: Run Phase 9 Tests (Docker & CI Audit)
+        working-directory: ./backend
+        run: npm run test:phase9
+
+      - name: Run High-Concurrency Stress Test (Phase 10)
+        working-directory: ./backend
+        run: npm run test:concurrency
+
+      - name: Run Phase 10 Tests (Architecture & Audit)
+        working-directory: ./backend
+        run: npm run test:phase10
+
+      - name: Run Phase 11 Tests (Kubernetes Manifests Audit)
+        working-directory: ./backend
+        run: npm run test:phase11
+
+  # -------------------------------------------------------------
+  # Job 2: Frontend Lint and Build Verification
+  # -------------------------------------------------------------
+  frontend-build:
+    name: Frontend Lint & Production Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run Linter
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Build Production Bundle (Vite)
+        working-directory: ./frontend
+        run: npm run build
+
+  # -------------------------------------------------------------
+  # Job 3: Docker Compose Specification Validation
+  # -------------------------------------------------------------
+  docker-validate:
+    name: Dockerfile & Docker Compose Config Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose Configuration
+        run: docker compose config
+
+      - name: Build Backend Docker Image
+        run: docker build -t codejudge-backend:ci ./backend
+
+      - name: Build Frontend Docker Image
+        run: docker build -t codejudge-frontend:ci ./frontend

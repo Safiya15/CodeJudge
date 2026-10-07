@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: codejudge
+  labels:
+    app.kubernetes.io/name: codejudge
+    app.kubernetes.io/part-of: online-judge-platform

@@ -1,0 +1,75 @@
+# -------------------------------------------------------------
+# 1. Asynchronous Worker Pool Deployment (BullMQ Consumer)
+# -------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codejudge-worker
+  namespace: codejudge
+  labels:
+    app: codejudge-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: codejudge-worker
+  template:
+    metadata:
+      labels:
+        app: codejudge-worker
+    spec:
+      terminationGracePeriodSeconds: 30 # Allow active judging to complete on SIGTERM
+      containers:
+        - name: worker
+          image: codejudge-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "src/workers/judge.worker.js"]
+          envFrom:
+            - configMapRef:
+                name: codejudge-config
+            - secretRef:
+                name: codejudge-secrets
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+---
+# -------------------------------------------------------------
+# 2. Ephemeral Kubernetes Job Template (Per-Batch / Offline Evaluation)
+# -------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: codejudge-batch-eval-sample
+  namespace: codejudge
+  labels:
+    app: codejudge-batch-job
+spec:
+  ttlSecondsAfterFinished: 300 # Automatically garbage-collect pod 5 mins after completion
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: codejudge-batch-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: batch-judge
+          image: codejudge-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "src/workers/judge.worker.js"]
+          envFrom:
+            - configMapRef:
+                name: codejudge-config
+            - secretRef:
+                name: codejudge-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'CodeJudge Dashboards'
+    orgId: 1
+    folder: 'CodeJudge'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

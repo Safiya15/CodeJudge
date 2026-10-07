@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codejudge-config
+  namespace: codejudge
+data:
+  NODE_ENV: "production"
+  PORT: "5000"
+  MONGODB_URI: "mongodb://mongodb.codejudge.svc.cluster.local:27017/codejudge"
+  REDIS_HOST: "redis.codejudge.svc.cluster.local"
+  REDIS_PORT: "6379"
+  JUDGE0_URL: "http://judge0.codejudge.svc.cluster.local:2358"
+  CORS_ORIGIN: "http://localhost:3000,http://localhost:5173"
+  USE_IN_MEMORY_QUEUE: "false"
+  MOCK_JUDGE0: "false"
