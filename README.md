@@ -1,4 +1,4 @@
-# CodeJudge ⚖️
+# CodeJudge 
 > **A high-performance, sandboxed online judge platform for real-time collegiate competitive programming contests.**
 
 [![CI Pipeline](https://github.com/your-org/codejudge/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/codejudge/actions/workflows/ci.yml)
