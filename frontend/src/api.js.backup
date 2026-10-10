@@ -63,10 +63,4 @@ export const api = {
   joinContest: (id) => apiRequest(`/contests/${id}/join`, { method: 'POST' }),
   getContestLeaderboard: (id) => apiRequest(`/contests/${id}/leaderboard`),
   createContest: (payload) => apiRequest('/contests', { method: 'POST', body: JSON.stringify(payload) }),
-    // AI Mentor
-  askAiMentor: (payload) =>
-    apiRequest('/ai/mentor', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
 };

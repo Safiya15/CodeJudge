@@ -6,7 +6,6 @@ import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import {
-  Sparkles,
   Clock,
   Cpu,
   Code2,
@@ -134,11 +133,6 @@ export const ProblemDetail = () => {
   const [runResults, setRunResults] = useState(null);
   const [runError, setRunError] = useState(null);
   const [activeCaseIndex, setActiveCaseIndex] = useState(0);
-  
-  const [aiMentorMode, setAiMentorMode] = useState('hint');
-  const [aiMentorResponse, setAiMentorResponse] = useState('');
-  const [aiMentorLoading, setAiMentorLoading] = useState(false);
-
 
   // ------------------------------------------------------------
   // Submit execution states
@@ -600,49 +594,6 @@ export const ProblemDetail = () => {
       setRunning(false);
     }
   };
-
-  
-  // ============================================================
-  // AI MENTOR
-  // ============================================================
-
-  const handleAskAiMentor = async (mode = aiMentorMode) => {
-    if (contestId) return;
-
-    if (!user) {
-      setAiMentorResponse('Please sign in to use AI Mentor.');
-      return;
-    }
-
-    setAiMentorMode(mode);
-    setAiMentorLoading(true);
-    setAiMentorResponse('');
-
-    try {
-      const res = await api.askAiMentor({
-        mode,
-        problemStatement: problem.statement,
-        code,
-        language,
-        errorMessage:
-          runError ||
-          runResults?.results?.[activeCaseIndex]?.compileError ||
-          '',
-      });
-
-      setAiMentorResponse(
-        res.data?.mentorResponse ||
-        'AI Mentor did not return a response.'
-      );
-    } catch (err) {
-      setAiMentorResponse(
-        err.message || 'Failed to contact AI Mentor.'
-      );
-    } finally {
-      setAiMentorLoading(false);
-    }
-  };
-
 
   // ============================================================
   // SUBMIT CODE
@@ -1475,67 +1426,6 @@ export const ProblemDetail = () => {
           />
 
         </div>
-
-        
-        {/* AI MENTOR PANEL */}
-        {!contestId && (
-          <div className="ai-mentor-panel">
-            <div className="ai-mentor-header">
-              <h3>
-                <Sparkles size={18} />
-                AI Mentor
-              </h3>
-              <p>Get guidance without revealing the full solution.</p>
-            </div>
-
-            <div className="ai-mentor-actions">
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAskAiMentor('hint')}
-                disabled={aiMentorLoading}
-              >
-                Get Hint
-              </button>
-
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAskAiMentor('explain_error')}
-                disabled={aiMentorLoading}
-              >
-                Explain Error
-              </button>
-
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAskAiMentor('review_code')}
-                disabled={aiMentorLoading}
-              >
-                Review Code
-              </button>
-
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAskAiMentor('complexity')}
-                disabled={aiMentorLoading}
-              >
-                Complexity
-              </button>
-            </div>
-
-            {aiMentorLoading && (
-              <p>AI Mentor is thinking...</p>
-            )}
-
-            {aiMentorResponse && (
-              <div className="ai-mentor-response">
-                <ReactMarkdown>
-                  {aiMentorResponse}
-                </ReactMarkdown>
-              </div>
-            )}
-          </div>
-        )}
-
 
         {/* ====================================================
             CONSOLE / OUTPUT DRAWER
