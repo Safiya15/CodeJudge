@@ -133,10 +133,22 @@ const submitLimiter = createRateLimiter({
   message: 'Submission limit exceeded. You can submit code at most 5 times per minute.',
 });
 
+// Rate limiter for AI Mentor: 10 requests per user per minute
+const aiMentorLimiter = createRateLimiter({
+  keyPrefix: 'ratelimit:ai-mentor',
+  max: 10,
+  windowSec: 60,
+  keyGenerator: (req) => {
+    return req.user ? req.user._id.toString() : req.ip || 'anonymous';
+  },
+  message: 'AI Mentor limit exceeded. You can use AI Mentor at most 10 times per minute.',
+});
+
 module.exports = {
   createRateLimiter,
   loginLimiter,
   runLimiter,
   submitLimiter,
+  aiMentorLimiter,
   inMemoryStore,
 };
