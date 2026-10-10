@@ -1,6 +1,7 @@
+
 require('dotenv').config();
+
 const { Worker } = require('bullmq');
-const { connectDB, disconnectDB } = require('../config/db');
 const { redisClient } = require('../config/redis');
 const { judgeProcessor } = require('./judgeProcessor');
 const { Submission } = require('../models');
@@ -8,37 +9,46 @@ const { QUEUE_NAME } = require('../queue/judgeQueue');
 
 const CONCURRENCY = parseInt(process.env.JUDGE_CONCURRENCY || '5', 10);
 
-const startWorker = async () => {
-  console.log('[JudgeWorker] Initializing Judge Worker process...');
-  await connectDB();
+let workerInstance = null;
 
-  const worker = new Worker(
+const startWorker = async () => {
+  if (workerInstance) {
+    return workerInstance;
+  }
+
+  if (process.env.USE_IN_MEMORY_QUEUE === 'true' || !redisClient) {
+    throw new Error(
+      'Judge worker requires Redis. Set USE_IN_MEMORY_QUEUE=false and configure REDIS_URL.'
+    );
+  }
+
+  console.log('[JudgeWorker] Initializing judge worker...');
+
+  workerInstance = new Worker(
     QUEUE_NAME,
-    async (job) => {
-      return judgeProcessor(job);
-    },
+    async (job) => judgeProcessor(job),
     {
       connection: redisClient,
       concurrency: CONCURRENCY,
     }
   );
 
-  worker.on('ready', () => {
-    console.log(`[JudgeWorker] Worker ready and listening on queue "${QUEUE_NAME}" (Concurrency: ${CONCURRENCY})`);
-  });
-
-  worker.on('completed', (job, result) => {
+  workerInstance.on('ready', () => {
     console.log(
-      `[JudgeWorker] Job ${job.id} completed. Verdict: ${result.verdict} | Time: ${result.runtimeMs}ms | Memory: ${result.memoryKb}KB`
+      `[JudgeWorker] Ready on queue "${QUEUE_NAME}" (Concurrency: ${CONCURRENCY})`
     );
   });
 
-  worker.on('failed', async (job, err) => {
-    console.error(`[JudgeWorker] Job ${job?.id} failed on attempt ${job?.attemptsMade}/${job?.opts?.attempts}: ${err.message}`);
+  workerInstance.on('completed', (job, result) => {
+    console.log(
+      `[JudgeWorker] Job ${job.id} completed. Verdict: ${result?.verdict}`
+    );
+  });
 
-    // If all retries exhausted, update submission status to 'Failed' in database
+  workerInstance.on('failed', async (job, err) => {
+    console.error(`[JudgeWorker] Job ${job?.id} failed: ${err.message}`);
+
     if (job && job.attemptsMade >= (job.opts?.attempts || 3)) {
-      console.error(`[JudgeWorker] Job ${job.id} exhausted all retry attempts. Marking submission as Failed.`);
       try {
         const submissionId = job.data?.submissionId;
         if (submissionId) {
@@ -48,36 +58,38 @@ const startWorker = async () => {
           });
         }
       } catch (dbErr) {
-        console.error(`[JudgeWorker] Failed to update submission state on retry exhaustion: ${dbErr.message}`);
+        console.error(`[JudgeWorker] Database update failed: ${dbErr.message}`);
       }
     }
   });
 
-  worker.on('error', (err) => {
-    console.error(`[JudgeWorker] Worker internal error: ${err.message}`);
+  workerInstance.on('error', (err) => {
+    console.error(`[JudgeWorker] Worker error: ${err.message}`);
   });
 
-  // Graceful shutdown
-  const shutdown = async (signal) => {
-    console.log(`\n[JudgeWorker] Received ${signal}. Draining active jobs and shutting down...`);
-    try {
-      await worker.close();
-      console.log('[JudgeWorker] BullMQ Worker closed.');
-      await disconnectDB();
-      console.log('[JudgeWorker] Disconnected from database.');
-      process.exit(0);
-    } catch (err) {
-      console.error(`[JudgeWorker] Error during shutdown: ${err.message}`);
-      process.exit(1);
-    }
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  return workerInstance;
 };
 
+// Preserve standalone worker support for `npm run worker`.
 if (require.main === module) {
-  startWorker();
+  const { connectDB, disconnectDB } = require('../config/db');
+
+  (async () => {
+    await connectDB();
+    const worker = await startWorker();
+
+    const shutdown = async () => {
+      await worker.close();
+      await disconnectDB();
+      process.exit(0);
+    };
+
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+  })().catch((err) => {
+    console.error('[JudgeWorker] Startup failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = { startWorker };

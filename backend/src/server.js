@@ -1,20 +1,22 @@
+
 const dns = require('dns');
 dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 require('dotenv').config();
+
 const http = require('http');
 const app = require('./app');
 const { connectDB, disconnectDB } = require('./config/db');
 const { initSocket } = require('./socket');
+const { startWorker } = require('./workers/judge.worker');
 
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
-  // Connect to MongoDB
   await connectDB();
 
+  // Start the API server
   const server = http.createServer(app);
-
-  // Initialize WebSockets
   await initSocket(server);
 
   server.listen(PORT, () => {
@@ -22,14 +24,23 @@ const startServer = async () => {
     console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 
-  // Graceful shutdown handlers
+  // Start the judge worker in this same process
+  await startWorker();
+
+  console.log('[Server] Judge worker startup completed.');
+
   const shutdown = async (signal) => {
-    console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
+    console.log(`\n[Server] Received ${signal}. Shutting down...`);
+
     server.close(async () => {
-      console.log('[Server] HTTP server closed.');
-      await disconnectDB();
-      console.log('[Server] Graceful shutdown completed.');
-      process.exit(0);
+      try {
+        await disconnectDB();
+        console.log('[Server] Graceful shutdown completed.');
+        process.exit(0);
+      } catch (err) {
+        console.error('[Server] Shutdown error:', err.message);
+        process.exit(1);
+      }
     });
   };
 
@@ -37,9 +48,11 @@ const startServer = async () => {
   process.on('SIGINT', () => shutdown('SIGINT'));
 };
 
-// Start the server if called directly
 if (require.main === module) {
-  startServer();
+  startServer().catch((err) => {
+    console.error('[Server] Startup failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = { startServer };
