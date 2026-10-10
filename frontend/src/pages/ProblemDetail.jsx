@@ -79,6 +79,17 @@ solve();
 `,
 };
 
+const res = await api.askAiMentor({
+  problemId: problem._id,
+  mode,
+  problemStatement: problem.statement,
+  code,
+  language,
+  errorMessage:
+    runError ||
+    runResults?.results?.[activeCaseIndex]?.compileError ||
+    '',
+});
 export const ProblemDetail = () => {
   const { slug } = useParams();
   const [searchParams] = useSearchParams();
