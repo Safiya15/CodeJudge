@@ -1,42 +1,42 @@
+
 const { compareOutputs } = require('../utils/comparator');
 
-const JUDGE0_URL = process.env.JUDGE0_URL || 'http://localhost:2358';
+const JUDGE0_URL = (
+  process.env.JUDGE0_URL || 'https://ce.judge0.com'
+).replace(/\/+$/, '');
+
 const JUDGE0_API_KEY = process.env.JUDGE0_API_KEY || null;
 
 // Standard Judge0 CE language IDs
 const LANGUAGE_MAP = {
-  cpp: Number(process.env.JUDGE0_LANG_CPP || 54),        // C++ (GCC 9.2.0)
-  python: Number(process.env.JUDGE0_LANG_PYTHON || 71),  // Python (3.8.1)
-  java: Number(process.env.JUDGE0_LANG_JAVA || 62),      // Java (OpenJDK 13.0.1)
-  javascript: Number(process.env.JUDGE0_LANG_JS || 63),  // JavaScript (Node.js 12.14.0)
+  cpp: Number(process.env.JUDGE0_LANG_CPP || 54),
+  python: Number(process.env.JUDGE0_LANG_PYTHON || 71),
+  java: Number(process.env.JUDGE0_LANG_JAVA || 62),
+  javascript: Number(process.env.JUDGE0_LANG_JS || 63),
 };
 
-/**
- * Maps Judge0 status id to CodeJudge verdict
- */
 const mapJudge0Status = (statusId, statusDescription, stderr) => {
   if (statusId === 3) return 'Accepted';
   if (statusId === 4) return 'Wrong Answer';
   if (statusId === 5) return 'Time Limit Exceeded';
   if (statusId === 6) return 'Compilation Error';
 
-  // Check for Memory Limit Exceeded
   if (
-    (statusDescription && statusDescription.toLowerCase().includes('memory')) ||
+    (statusDescription &&
+      statusDescription.toLowerCase().includes('memory')) ||
     (stderr && stderr.toLowerCase().includes('memory limit'))
   ) {
     return 'Memory Limit Exceeded';
   }
 
-  // Judge0 status 7-12 are runtime errors
   if (statusId >= 7 && statusId <= 12) return 'Runtime Error';
 
   return 'Runtime Error';
 };
 
-/**
- * Executes a single code submission against Judge0 sandbox synchronously.
- */
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 const runSingleCase = async ({
   code,
   language,
@@ -46,11 +46,11 @@ const runSingleCase = async ({
   memoryLimitMb = 256,
 }) => {
   const languageId = LANGUAGE_MAP[language.toLowerCase()];
+
   if (!languageId) {
     throw new Error(`Unsupported programming language: ${language}`);
   }
 
-  // If mock mode is explicitly enabled (e.g. unit tests or local dev without Docker)
   if (process.env.MOCK_JUDGE0 === 'true') {
     return mockExecute({ code, language, stdin, expectedOutput });
   }
@@ -59,51 +59,110 @@ const runSingleCase = async ({
     source_code: code,
     language_id: languageId,
     stdin: stdin || '',
-    expected_output: expectedOutput || undefined,
-    cpu_time_limit: timeLimitMs / 1000, // Judge0 takes seconds
-    memory_limit: memoryLimitMb * 1024, // Judge0 takes KB
+    cpu_time_limit: timeLimitMs / 1000,
+    memory_limit: memoryLimitMb * 1024,
   };
+
+  if (expectedOutput !== undefined) {
+    payload.expected_output = expectedOutput;
+  }
 
   const headers = {
     'Content-Type': 'application/json',
   };
-  if (JUDGE0_API_KEY) {
+
+  // Add RapidAPI headers only when using the RapidAPI endpoint.
+  if (JUDGE0_API_KEY && JUDGE0_URL.includes('rapidapi.com')) {
     headers['X-RapidAPI-Key'] = JUDGE0_API_KEY;
     headers['X-RapidAPI-Host'] = 'judge0-ce.p.rapidapi.com';
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeLimitMs + 8000);
+
+  // Allow extra time for queueing and compilation beyond the code time limit.
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.max(timeLimitMs + 30000, 45000)
+  );
 
   try {
-    const response = await fetch(`${JUDGE0_URL}/submissions?base64_encoded=false&wait=true`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+    // 1. Submit the code asynchronously and receive a token.
+    const submitResponse = await fetch(
+      `${JUDGE0_URL}/submissions?base64_encoded=false&wait=false`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      }
+    );
 
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[Judge0] Sandbox error response (${response.status}): ${errText}`);
-      throw new Error('Judge sandbox temporary execution failure.');
+    if (!submitResponse.ok) {
+      const errorText = await submitResponse.text();
+      console.error(
+        `[Judge0] Submission failed (${submitResponse.status}): ${errorText}`
+      );
+      throw new Error(`Judge0 submission failed: HTTP ${submitResponse.status}`);
     }
 
-    const data = await response.json();
+    const submission = await submitResponse.json();
+
+    if (!submission.token) {
+      throw new Error('Judge0 did not return a submission token.');
+    }
+
+    // 2. Poll until Judge0 finishes processing the submission.
+    let data;
+
+    while (true) {
+      await sleep(1000);
+
+      const resultResponse = await fetch(
+        `${JUDGE0_URL}/submissions/${encodeURIComponent(
+          submission.token
+        )}?base64_encoded=false`,
+        {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+        }
+      );
+
+      if (!resultResponse.ok) {
+        const errorText = await resultResponse.text();
+        console.error(
+          `[Judge0] Result request failed (${resultResponse.status}): ${errorText}`
+        );
+        throw new Error(
+          `Judge0 result request failed: HTTP ${resultResponse.status}`
+        );
+      }
+
+      data = await resultResponse.json();
+
+      const statusId = data.status?.id;
+
+      // Status 1 = In Queue, 2 = Processing.
+      if (statusId !== 1 && statusId !== 2) {
+        break;
+      }
+    }
+
     const actualOutput = data.stdout || '';
     const compileError = data.compile_output || null;
     const stderr = data.stderr || null;
-    const runtimeMs = data.time != null ? Math.round(parseFloat(data.time) * 1000) : null;
+    const runtimeMs =
+      data.time != null ? Math.round(Number(data.time) * 1000) : null;
     const memoryKb = data.memory != null ? data.memory : null;
 
-    let verdict = mapJudge0Status(data.status?.id, data.status?.description, stderr);
+    let verdict = mapJudge0Status(
+      data.status?.id,
+      data.status?.description,
+      stderr
+    );
 
-    // If Judge0 marked it as Accepted or returned stdout, verify via strict comparison utility
     if (verdict === 'Accepted' && expectedOutput !== undefined) {
-      const isMatch = compareOutputs(actualOutput, expectedOutput);
-      if (!isMatch) {
+      if (!compareOutputs(actualOutput, expectedOutput)) {
         verdict = 'Wrong Answer';
       }
     }
@@ -118,26 +177,24 @@ const runSingleCase = async ({
       exitCode: data.exit_code,
     };
   } catch (err) {
-    clearTimeout(timeout);
     if (err.name === 'AbortError') {
       return {
         status: 'Time Limit Exceeded',
         stdout: '',
-        stderr: 'Time Limit Exceeded (Timeout)',
+        stderr: 'Judge0 request timed out.',
         compileError: null,
         runtimeMs: timeLimitMs,
         memoryKb: null,
       };
     }
+
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 };
 
-/**
- * Lightweight mock executor for offline development/testing when Judge0 Docker is not active
- */
 const mockExecute = async ({ code, language, stdin, expectedOutput }) => {
-  // Check for intentional syntax error
   if (code.includes('syntax_error') || code.includes('COMPILE_ERROR')) {
     return {
       status: 'Compilation Error',
@@ -149,8 +206,11 @@ const mockExecute = async ({ code, language, stdin, expectedOutput }) => {
     };
   }
 
-  // Check for intentional infinite loop
-  if (code.includes('while(true)') || code.includes('while (true)') || code.includes('while True:')) {
+  if (
+    code.includes('while(true)') ||
+    code.includes('while (true)') ||
+    code.includes('while True:')
+  ) {
     return {
       status: 'Time Limit Exceeded',
       stdout: '',
@@ -161,13 +221,12 @@ const mockExecute = async ({ code, language, stdin, expectedOutput }) => {
     };
   }
 
-  // Simple echo or output matcher
-  let stdout = expectedOutput || '';
-  if (code.includes('FORCE_WRONG_ANSWER')) {
-    stdout = 'wrong_result_123';
-  }
+  const stdout = code.includes('FORCE_WRONG_ANSWER')
+    ? 'wrong_result_123'
+    : expectedOutput || '';
 
   const isMatch = compareOutputs(stdout, expectedOutput);
+
   return {
     status: isMatch ? 'Accepted' : 'Wrong Answer',
     stdout,
